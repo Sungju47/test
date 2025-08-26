@@ -10,7 +10,7 @@ from typing import List
 
 st.set_page_config(page_title="ARAM PS Dashboard", layout="wide")
 
-CSV_PATH = "https://github.com/Sungju47/test/blob/main/aram_participants_clean_preprocessed.csv"
+CSV_PATH = "https://raw.githubusercontent.com/Sungju47/test/refs/heads/main/aram_participants_clean_preprocessed.csv"
 
 # --- 데이터 로드 ---
 @st.cache_data
