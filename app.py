@@ -198,47 +198,38 @@ def item_stats(sub: pd.DataFrame) -> pd.DataFrame:
     g = g.sort_values(["total_picks","win_rate"], ascending=[False,False])
     return g
 st.dataframe(item_stats(dfc).head(25), use_container_width=True)
-# ---------- 추천 아이템 & 룬 아이콘 표시 ----------
-st.subheader("추천 아이템/룬 (Top3)")
+# ---------- 스펠/룬 ----------
+c1, c2 = st.columns(2)
+with c1:
+    st.subheader("스펠 조합")
+    if "spell_combo" in dfc.columns and dfc["spell_combo"].str.strip().any():
+        sp = (dfc.groupby("spell_combo")
+              .agg(games=("matchId","count"), wins=("win_clean","sum"))
+              .reset_index())
+        sp["win_rate"] = (sp["wins"]/sp["games"]*100).round(2)
+        sp = sp.sort_values(["games","win_rate"], ascending=[False,False])
+        st.dataframe(sp.head(10), use_container_width=True)
+    else:
+        st.info("스펠 정보가 부족합니다.")
 
-# --- Top 3 아이템 ---
-top_items = item_stats(dfc).head(3)
-# 아이템 아이콘 매핑 (Data Dragon CDN 기준, 필요시 더 추가)
-item_icons = {
-    "Infinity Edge": "https://ddragon.leagueoflegends.com/cdn/13.15.1/img/item/3031.png",
-    "Rabadon's Deathcap": "https://ddragon.leagueoflegends.com/cdn/13.15.1/img/item/3089.png",
-    # ... 나머지 아이템 URL 추가 ...
-}
+with c2:
+    st.subheader("추천 룬 트리 (한 가지)")
+    if ("rune_core" in dfc.columns) and ("rune_sub" in dfc.columns):
+        rn = (dfc.groupby(["rune_core","rune_sub"])
+              .agg(games=("matchId","count"), wins=("win_clean","sum"))
+              .reset_index())
+        rn["win_rate"] = (rn["wins"]/rn["games"]*100).round(2)
+        rn = rn.sort_values(["games","win_rate"], ascending=[False,False])
+        top_rune = rn.iloc[0]  # 추천 트리 한 개 선택
 
-st.markdown("**추천 아이템:**")
-cols = st.columns(len(top_items))
-for i, (_, row) in enumerate(top_items.iterrows()):
-    url = item_icons.get(row['item'], "")
-    if url:
-        cols[i].image(url, width=60, caption=row['item'])
+        # Data Dragon CDN 기준으로 아이콘 URL 생성
+        rune_core_url = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/{top_rune['rune_core']}.png"
+        rune_sub_url  = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/{top_rune['rune_sub']}.png"
 
-# --- Top 3 룬 ---
-if ("rune_core" in dfc.columns) and ("rune_sub" in dfc.columns):
-    top_runes = (dfc.groupby(["rune_core","rune_sub"])
-                 .agg(games=("matchId","count"), wins=("win_clean","sum"))
-                 .reset_index())
-    top_runes["win_rate"] = (top_runes["wins"]/top_runes["games"]*100).round(2)
-    top_runes = top_runes.sort_values(["games","win_rate"], ascending=[False,False]).head(3)
-
-    rune_icons = {
-        "Electrocute": "https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Domination/Electrocute/Electrocute.png",
-        "Domination": "https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Domination/Domination.png",
-        # ... 나머지 룬 추가 ...
-    }
-
-    st.markdown("**추천 룬:**")
-    cols = st.columns(len(top_runes))
-    for i, (_, row) in enumerate(top_runes.iterrows()):
-        core_url = rune_icons.get(row['rune_core'], "")
-        sub_url  = rune_icons.get(row['rune_sub'], "")
-        imgs = [url for url in [core_url, sub_url] if url]
-        if imgs:
-            cols[i].image(imgs, width=50, caption=f"{row['rune_core']} + {row['rune_sub']}")
+        st.markdown(f"게임 수: {top_rune['games']}, 승률: {top_rune['win_rate']}%")
+        st.image([rune_core_url, rune_sub_url], width=64)
+    else:
+        st.info("룬 정보가 부족합니다.")
 # ---------- 스펠/룬 ----------
 c1, c2 = st.columns(2)
 with c1:
