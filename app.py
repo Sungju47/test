@@ -198,38 +198,32 @@ def item_stats(sub: pd.DataFrame) -> pd.DataFrame:
     g = g.sort_values(["total_picks","win_rate"], ascending=[False,False])
     return g
 st.dataframe(item_stats(dfc).head(25), use_container_width=True)
-# ---------- 스펠/룬 ----------
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("스펠 조합")
-    if "spell_combo" in dfc.columns and dfc["spell_combo"].str.strip().any():
-        sp = (dfc.groupby("spell_combo")
-              .agg(games=("matchId","count"), wins=("win_clean","sum"))
-              .reset_index())
-        sp["win_rate"] = (sp["wins"]/sp["games"]*100).round(2)
-        sp = sp.sort_values(["games","win_rate"], ascending=[False,False])
-        st.dataframe(sp.head(10), use_container_width=True)
-    else:
-        st.info("스펠 정보가 부족합니다.")
+# ---------- 추천 아이템/룬 아이콘 표시 ----------
+st.subheader("추천 아이템/룬 트리")
 
-with c2:
-    st.subheader("추천 룬 트리 (한 가지)")
-    if ("rune_core" in dfc.columns) and ("rune_sub" in dfc.columns):
-        rn = (dfc.groupby(["rune_core","rune_sub"])
-              .agg(games=("matchId","count"), wins=("win_clean","sum"))
-              .reset_index())
-        rn["win_rate"] = (rn["wins"]/rn["games"]*100).round(2)
-        rn = rn.sort_values(["games","win_rate"], ascending=[False,False])
-        top_rune = rn.iloc[0]  # 추천 트리 한 개 선택
+# 1) 추천 아이템: 판수 기준 + 승률 기준 top 1
+items_df = item_stats(dfc)
+if not items_df.empty:
+    top_item = items_df.iloc[0]["item"]
+    item_url = f"https://ddragon.leagueoflegends.com/cdn/13.23.1/img/item/{top_item}.png"  # Data Dragon CDN, 아이템 ID 필요
+    st.image(item_url, width=64, caption=top_item)
 
-        # Data Dragon CDN 기준으로 아이콘 URL 생성
-        rune_core_url = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/{top_rune['rune_core']}.png"
-        rune_sub_url  = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/{top_rune['rune_sub']}.png"
-
-        st.markdown(f"게임 수: {top_rune['games']}, 승률: {top_rune['win_rate']}%")
-        st.image([rune_core_url, rune_sub_url], width=64)
-    else:
-        st.info("룬 정보가 부족합니다.")
+# 2) 추천 룬: 판수+승률 기준 top 1 트리
+if ("rune_core" in dfc.columns) and ("rune_sub" in dfc.columns):
+    runes_df = (dfc.groupby(["rune_core","rune_sub"])
+                .agg(games=("matchId","count"), wins=("win_clean","sum"))
+                .reset_index())
+    runes_df["win_rate"] = (runes_df["wins"]/runes_df["games"]*100).round(2)
+    runes_df = runes_df.sort_values(["games","win_rate"], ascending=[False,False])
+    top_rune_core = runes_df.iloc[0]["rune_core"]
+    top_rune_sub  = runes_df.iloc[0]["rune_sub"]
+    
+    rune_core_url = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Precision/Precision{top_rune_core}/Precision{top_rune_core}.png"
+    rune_sub_url  = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Resolve/Resolve{top_rune_sub}/Resolve{top_rune_sub}.png"
+    
+    cols = st.columns(2)
+    cols[0].image(rune_core_url, width=64, caption=top_rune_core)
+    cols[1].image(rune_sub_url, width=64, caption=top_rune_sub)
 # ---------- 스펠/룬 ----------
 c1, c2 = st.columns(2)
 with c1:
