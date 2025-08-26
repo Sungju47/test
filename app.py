@@ -1,3 +1,4 @@
+st.cache_data.clear()
 """
 Streamlit ARAM PS Dashboard — Champion-centric
 File: streamlit_aram_ps_app_champion.py
