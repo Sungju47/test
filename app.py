@@ -182,58 +182,45 @@ if core_cols:
         core_stats["win_rate"] = (core_stats["wins"]/core_stats["games"]*100).round(2)
         core_stats = core_stats.sort_values(["games","win_rate"], ascending=[False,False])
         st.dataframe(core_stats.head(20), use_container_width=True)
-# ---------- 추천 아이템/룬 이미지 ----------
-st.subheader("추천 아이템 & 룬")
+# ---------- 추천 아이템/룬 이미지 표시 ----------
+st.subheader("추천 아이템 / 룬")
+
+# Data Dragon 버전
+ddragon_version = "13.22.1"  # 예시, 실제 게임 버전에 맞게 수정
 
 # 아이템 추천
-item_id_cols = [c for c in dfc.columns if c.startswith("item") and c.endswith("_id")]
-items_for_stats = []
+items_df = item_stats(dfc)
+if not items_df.empty:
+    top_item = items_df.sort_values(["games","win_rate"], ascending=[False, False]).iloc[0]
+    top_item_id = str(top_item["item"])
+    top_item_url = f"https://ddragon.leagueoflegends.com/cdn/{ddragon_version}/img/item/{top_item_id}.png"
 
-for c in item_id_cols:
-    items_for_stats.append(dfc[["matchId","win_clean",c]].rename(columns={c:"item_id"}))
-
-if items_for_stats:
-    u = pd.concat(items_for_stats, ignore_index=True)
-    u = u[u["item_id"].astype(str) != ""]
-    if not u.empty:
-        item_stats_df = u.groupby("item_id").agg(total_picks=("matchId","count"),
-                                                 wins=("win_clean","sum")).reset_index()
-        item_stats_df["win_rate"] = (item_stats_df["wins"]/item_stats_df["total_picks"]*100).round(2)
-        top_item = item_stats_df.sort_values(["total_picks","win_rate"], ascending=[False, False]).iloc[0]
-
-        # Data Dragon CDN URL (버전은 임의로 13.23.1 기준)
-        dd_version = "13.23.1"
-        item_url = f"https://ddragon.leagueoflegends.com/cdn/{dd_version}/img/item/{top_item['item_id']}.png"
-        c1, c2 = st.columns([1,3])
-        with c1:
-            st.image(item_url, width=64)
-            st.caption(f"추천 아이템\n픽수: {top_item['total_picks']}, 승률: {top_item['win_rate']}%")
-    else:
-        st.info("아이템 데이터가 없습니다.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.image(top_item_url, width=64)
+        st.caption(f"추천 아이템\n{top_item_id}\n({top_item['games']}판, 승률 {top_item['win_rate']}%)")
+else:
+    st.info("추천 아이템 데이터가 없습니다.")
 
 # 룬 추천
-if ("rune_core" in dfc.columns) and ("rune_sub" in dfc.columns):
+if "rune_core" in dfc.columns and "rune_sub" in dfc.columns:
     rn = (dfc.groupby(["rune_core","rune_sub"])
           .agg(games=("matchId","count"), wins=("win_clean","sum"))
           .reset_index())
-    rn["win_rate"] = (rn["wins"]/rn["games"]*100).round(2)
-    rn = rn.sort_values(["games","win_rate"], ascending=[False,False])
-    top_rune = rn.iloc[0]
-
-    # Data Dragon CDN 룬 이미지 URL (룬 ID 기반)
-    rune_base_url = "https://ddragon.leagueoflegends.com/cdn/img/perk-images"
-    # 예시: main rune + sub rune
-    main_rune_url = f"{rune_base_url}/styles/{top_rune['rune_core']}.png"
-    sub_rune_url = f"{rune_base_url}/styles/{top_rune['rune_sub']}.png"
-    c1, c2 = st.columns(2)
-    with c1:
-        st.image(main_rune_url, width=64)
-        st.caption(f"추천 메인룬\n게임수: {top_rune['games']}, 승률: {top_rune['win_rate']}%")
-    with c2:
-        st.image(sub_rune_url, width=64)
-        st.caption("추천 서브룬")
+    if not rn.empty:
+        top_rune = rn.sort_values(["games","wins"], ascending=[False, False]).iloc[0]
+        core_id = str(top_rune["rune_core"])
+        sub_id = str(top_rune["rune_sub"])
+        core_url = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/{core_id}.png"
+        sub_url  = f"https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/{sub_id}.png"
+        with c2:
+            st.image([core_url, sub_url], width=64)
+            st.caption(f"추천 룬\n({top_rune['games']}판, 승률 {round(top_rune['wins']/top_rune['games']*100,2)}%)")
+    else:
+        st.info("추천 룬 데이터가 없습니다.")
 else:
     st.info("룬 데이터가 부족합니다.")
+
 
 # ---------- 스펠/룬 ----------
 c1, c2 = st.columns(2)
