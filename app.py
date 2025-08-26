@@ -198,6 +198,47 @@ def item_stats(sub: pd.DataFrame) -> pd.DataFrame:
     g = g.sort_values(["total_picks","win_rate"], ascending=[False,False])
     return g
 st.dataframe(item_stats(dfc).head(25), use_container_width=True)
+# ---------- 추천 아이템 & 룬 아이콘 표시 ----------
+st.subheader("추천 아이템/룬 (Top3)")
+
+# --- Top 3 아이템 ---
+top_items = item_stats(dfc).head(3)
+# 아이템 아이콘 매핑 (Data Dragon CDN 기준, 필요시 더 추가)
+item_icons = {
+    "Infinity Edge": "https://ddragon.leagueoflegends.com/cdn/13.15.1/img/item/3031.png",
+    "Rabadon's Deathcap": "https://ddragon.leagueoflegends.com/cdn/13.15.1/img/item/3089.png",
+    # ... 나머지 아이템 URL 추가 ...
+}
+
+st.markdown("**추천 아이템:**")
+cols = st.columns(len(top_items))
+for i, (_, row) in enumerate(top_items.iterrows()):
+    url = item_icons.get(row['item'], "")
+    if url:
+        cols[i].image(url, width=60, caption=row['item'])
+
+# --- Top 3 룬 ---
+if ("rune_core" in dfc.columns) and ("rune_sub" in dfc.columns):
+    top_runes = (dfc.groupby(["rune_core","rune_sub"])
+                 .agg(games=("matchId","count"), wins=("win_clean","sum"))
+                 .reset_index())
+    top_runes["win_rate"] = (top_runes["wins"]/top_runes["games"]*100).round(2)
+    top_runes = top_runes.sort_values(["games","win_rate"], ascending=[False,False]).head(3)
+
+    rune_icons = {
+        "Electrocute": "https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Domination/Electrocute/Electrocute.png",
+        "Domination": "https://ddragon.leagueoflegends.com/cdn/img/perk-images/Styles/Domination/Domination.png",
+        # ... 나머지 룬 추가 ...
+    }
+
+    st.markdown("**추천 룬:**")
+    cols = st.columns(len(top_runes))
+    for i, (_, row) in enumerate(top_runes.iterrows()):
+        core_url = rune_icons.get(row['rune_core'], "")
+        sub_url  = rune_icons.get(row['rune_sub'], "")
+        imgs = [url for url in [core_url, sub_url] if url]
+        if imgs:
+            cols[i].image(imgs, width=50, caption=f"{row['rune_core']} + {row['rune_sub']}")
 # ---------- 스펠/룬 ----------
 c1, c2 = st.columns(2)
 with c1:
