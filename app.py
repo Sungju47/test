@@ -1,11 +1,10 @@
 import os, pandas as pd, numpy as np, streamlit as st
-from io import BytesIO
 import requests, re, unicodedata
 import plotly.express as px
 
 st.set_page_config(page_title="ARAM Dashboard", layout="wide")
 
-# -------------------- Data Dragon 헬퍼 --------------------
+# -------------------- Data Dragon --------------------
 @st.cache_data(show_spinner=False, ttl=86400)
 def ddragon_version():
     return requests.get("https://ddragon.leagueoflegends.com/api/versions.json", timeout=5).json()[0]
@@ -47,7 +46,7 @@ def spell_icon_url(name:str)->str:
     skey = DD["spell_name2key"].get(name.strip(), "SummonerFlash")
     return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/{skey}.png"
 
-# -------------------- CSV 로드 --------------------
+# -------------------- CSV --------------------
 CSV_CANDIDATES = [
     "aram_participants_with_icons_superlight.csv",
     "aram_participants_with_items.csv",
@@ -60,7 +59,6 @@ def _discover_csv():
 uploaded = st.sidebar.file_uploader("CSV 업로드", type="csv")
 auto_path = _discover_csv()
 df = pd.read_csv(uploaded) if uploaded else pd.read_csv(auto_path) if auto_path else None
-
 if df is None:
     st.error("CSV 파일이 없습니다.")
     st.stop()
@@ -78,34 +76,62 @@ st.image(champion_icon_url(sel), width=100)
 st.metric("게임 수", games)
 st.metric("승률", f"{wr}%")
 
-# -------------------- 아이템 추천 --------------------
-st.subheader("추천 아이템")
-item_cols = [c for c in dfc if "item" in c and "_name" in c]
-rec = pd.concat([dfc[["win",c]].rename(columns={c:"item"}) for c in item_cols])
-rec = rec[rec["item"]!=""]
-g = rec.groupby("item").agg(total=("item","count"), wins=("win","sum")).assign(win_rate=lambda d:(d.wins/d.total*100)).sort_values(["total","win_rate"],ascending=[False,False]).head(5).reset_index()
+# -------------------- 탭 --------------------
+tab1, tab2, tab3, tab4 = st.tabs([":bar_chart: 게임 분석", ":crossed_swords: 아이템/스펠", ":stopwatch: 타임라인", ":clipboard: 상세 데이터"])
 
-for _, r in g.iterrows():
-    col1, col2, col3 = st.columns([1,3,1])
-    col1.image(item_icon_url(r.item), width=32)
-    col2.write(r.item)
-    col3.write(f"{int(r.total)}G / {round(r.win_rate,1)}%")
+# -------------------- 게임 분석 --------------------
+with tab1:
+    if "damage_total" in dfc and "duration_min" in dfc:
+        dfc["dpm"] = dfc["damage_total"]/dfc["duration_min"].replace(0,np.nan)
+        fig = px.histogram(dfc, x="dpm", nbins=20, title="DPM 분포")
+        st.plotly_chart(fig, use_container_width=True)
+    if "first_blood_min" in dfc:
+        st.metric("퍼블 평균 분", round(dfc["first_blood_min"].mean(),2))
+    if "game_end_min" in dfc:
+        st.metric("평균 게임 시간", round(dfc["game_end_min"].mean(),2))
 
-# -------------------- 스펠 추천 --------------------
-st.subheader("추천 스펠")
-dfc["spell_combo"] = dfc["spell1_name"].astype(str) + " + " + dfc["spell2_name"].astype(str)
-sp = dfc.groupby("spell_combo").agg(games=("spell_combo","count"), wins=("win","sum")).assign(win_rate=lambda d:(d.wins/d.games*100)).sort_values(["games","win_rate"],ascending=[False,False]).head(5).reset_index()
+# -------------------- 아이템 & 스펠 --------------------
+with tab2:
+    left, right = st.columns(2)
+    
+    # 아이템
+    with left:
+        st.subheader("추천 아이템")
+        item_cols = [c for c in dfc if "item" in c and "_name" in c]
+        rec = pd.concat([dfc[["win",c]].rename(columns={c:"item"}) for c in item_cols])
+        rec = rec[rec["item"]!=""]
+        g = rec.groupby("item").agg(total=("item","count"), wins=("win","sum")).assign(win_rate=lambda d:(d.wins/d.total*100)).sort_values(["total","win_rate"],ascending=[False,False]).head(10).reset_index()
+        for _, r in g.iterrows():
+            c1,c2,c3,c4 = st.columns([1,4,2,2])
+            c1.image(item_icon_url(r.item), width=32)
+            c2.write(r.item)
+            c3.write(f"{int(r.total)}G")
+            c4.write(f"{round(r.win_rate,1)}%")
+            st.divider()
+    
+    # 스펠
+    with right:
+        st.subheader("추천 스펠")
+        dfc["spell_combo"] = dfc["spell1_name"].astype(str) + " + " + dfc["spell2_name"].astype(str)
+        sp = dfc.groupby("spell_combo").agg(games=("spell_combo","count"), wins=("win","sum")).assign(win_rate=lambda d:(d.wins/d.games*100)).sort_values(["games","win_rate"],ascending=[False,False]).head(8).reset_index()
+        for _, r in sp.iterrows():
+            s1,s2 = r.spell_combo.split(" + ")
+            c1,c2,c3 = st.columns([2,3,2])
+            c1.image(spell_icon_url(s1), width=28)
+            c1.image(spell_icon_url(s2), width=28)
+            c2.write(r.spell_combo)
+            c3.write(f"{r.games}G / {round(r.win_rate,1)}%")
+            st.divider()
 
-for _, r in sp.iterrows():
-    s1, s2 = r.spell_combo.split(" + ")
-    col1, col2, col3 = st.columns([1,3,1])
-    col1.image(spell_icon_url(s1), width=28)
-    col1.image(spell_icon_url(s2), width=28)
-    col2.write(r.spell_combo)
-    col3.write(f"{r.games}G / {round(r.win_rate,1)}%")
+# -------------------- 타임라인 --------------------
+with tab3:
+    if "first_core_item_min" in dfc:
+        st.metric("1코어 평균 분", round(dfc["first_core_item_min"].mean(),2))
+        fig = px.histogram(dfc, x="first_core_item_min", nbins=20, title="1코어 시점")
+        st.plotly_chart(fig, use_container_width=True)
 
-# -------------------- DPM 그래프 --------------------
-if "damage_total" in dfc and "duration_min" in dfc:
-    dfc["dpm"] = dfc["damage_total"] / dfc["duration_min"].replace(0,np.nan)
-    fig = px.histogram(dfc, x="dpm", nbins=20, title="DPM 분포")
-    st.plotly_chart(fig, use_container_width=True)
+# -------------------- 상세 데이터 --------------------
+with tab4:
+    st.dataframe(dfc, use_container_width=True)
+
+st.caption(f"Data-Dragon v{DDRAGON_VERSION} · {len(champions)}챔프 · {len(df)}경기")
