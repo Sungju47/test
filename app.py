@@ -1,164 +1,175 @@
-import os
-import re
+import os, ast, requests
+from io import BytesIO
+from typing import List
+import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.express as px
+from PIL import Image
 st.set_page_config(page_title="ARAM PS Dashboard", layout="wide")
-# ── 파일 경로 ───────────────────────────────────────────
-PLAYERS_CSV = "aram_participants_with_icons_superlight.csv"  # 참가자 데이터(아이템/스펠/룬 이름, 일부 아이콘 포함)
-ITEM_SUM_CSV = "item_summary_with_icons.csv"                 # 아이템 요약(아이콘 포함) ← 헤더: item, icon_url, total_picks, wins, win_rate
-# ── 로더 ────────────────────────────────────────────────
-@st.cache_data
-def load_players(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        st.error(f"`{path}` 파일이 리포지토리 루트에 없습니다.")
-        st.stop()
-    df = pd.read_csv(path)
-    # 승패 플래그 통일
-    if "win_clean" in df.columns:
-        pass
-    elif "win" in df.columns:
-        df["win_clean"] = df["win"].astype(str).str.lower().isin(["true","1","t","yes"]).astype(int)
-    else:
-        df["win_clean"] = 0
-    # 아이템 이름 칼럼 정규화
-    item_name_cols = [c for c in df.columns if re.fullmatch(r"item[0-6]_name", c)]
-    for c in item_name_cols:
-        df[c] = df[c].fillna("").astype(str).str.strip()
-    # 텍스트 스펠/룬 컬럼도 있으면 정리
-    for c in ["spell1","spell2","rune_core","rune_sub"]:
-        if c in df.columns:
-            df[c] = df[c].fillna("").astype(str).str.strip()
-    # 아이콘 컬럼 존재여부는 상황에 따라 다름(없어도 동작하게)
+# ------------------------------------------------------------------
+# Data-Dragon 이미지 helpers
+# ------------------------------------------------------------------
+DDRAGON_VERSION = "14.1.1"            # 리그 패치 버전에 맞춰 갱신
+_CHAMP_FIX = {
+    "Aurelion Sol":"AurelionSol","Cho'Gath":"Chogath","Dr. Mundo":"DrMundo",
+    "Jarvan IV":"JarvanIV","Kai'Sa":"Kaisa","Kha'Zix":"Khazix","Kog'Maw":"KogMaw",
+    "LeBlanc":"Leblanc","Lee Sin":"LeeSin","Master Yi":"MasterYi",
+    "Miss Fortune":"MissFortune","Nunu & Willump":"Nunu","Rek'Sai":"RekSai",
+    "Renata Glasc":"Renata","Tahm Kench":"TahmKench","Twisted Fate":"TwistedFate",
+    "Vel'Koz":"Velkoz","Wukong":"MonkeyKing","Xin Zhao":"XinZhao"
+}
+@st.cache_data(show_spinner=False)
+def champion_icon_url(name:str)->str:
+    n=_CHAMP_FIX.get(name, name.replace(" ","").replace("'",""))
+    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/champion/{n}.png"
+_ITEM_ID={
+    "Infinity Edge":"3031","Rabadon's Deathcap":"3089","Void Staff":"3135",
+    "Zhonya's Hourglass":"3157","Kraken Slayer":"6672","Galeforce":"6671",
+    "Berserker's Greaves":"3006","Ionian Boots of Lucidity":"3158",
+    "Plated Steelcaps":"3047","Mercury's Treads":"3111","Boots of Swiftness":"3009",
+    "Health Potion":"2003","Control Ward":"2055","Doran's Blade":"1055",
+    "Doran's Ring":"1056","Doran's Shield":"1054",
+}
+def item_icon_url(item:str)->str:
+    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/{_ITEM_ID.get(item,'1001')}.png"
+_SPELL_KEY={
+    "Flash":"SummonerFlash","Ignite":"SummonerDot","Heal":"SummonerHeal",
+    "Barrier":"SummonerBarrier","Exhaust":"SummonerExhaust","Teleport":"SummonerTeleport",
+    "Ghost":"SummonerHaste","Cleanse":"SummonerBoost","Smite":"SummonerSmite",
+    "Mark":"SummonerSnowball","Snowball":"SummonerSnowball","Clarity":"SummonerMana"
+}
+def spell_icon_url(spell:str)->str:
+    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/{_SPELL_KEY.get(spell.strip(),'SummonerFlash')}.png"
+@st.cache_data(show_spinner=False)
+def load_image(url:str)->Image.Image|None:
+    try:
+        return Image.open(BytesIO(requests.get(url,timeout=5).content))
+    except: return None
+# ------------------------------------------------------------------
+# CSV 로더
+# ------------------------------------------------------------------
+CSV_CANDIDATES=[
+    "aram_participants_with_full_runes_merged_plus.csv",
+    "aram_participants_with_full_runes_merged.csv",
+    "aram_participants_with_full_runes.csv",
+    "aram_participants_clean_preprocessed.csv",
+    "aram_participants_clean_no_dupe_items.csv",
+    "aram_participants_with_items.csv",
+]
+def _discover_csv():
+    for f in CSV_CANDIDATES:
+        if os.path.exists(f): return f
+    return None
+def _yes(x): return 1 if str(x).strip().lower() in ("1","true","t","yes") else 0
+def _as_list(s):
+    if isinstance(s,list): return s
+    if not isinstance(s,str) or not s.strip(): return []
+    try:
+        v=ast.literal_eval(s);
+        if isinstance(v,list): return v
+    except: pass
+    spl="|" if "|" in s else "," if "," in s else None
+    return [t.strip() for t in s.split(spl)] if spl else [s]
+@st.cache_data(show_spinner=False)
+def load_df(buf)->pd.DataFrame:
+    df=pd.read_csv(buf)
+    df["win_clean"]=df.get("win",0).apply(_yes)
+    s1="spell1_name" if "spell1_name" in df else "spell1"
+    s2="spell2_name" if "spell2_name" in df else "spell2"
+    df["spell_combo"]=(df[s1].astype(str)+" + "+df[s2].astype(str)).str.strip()
+    for c in [c for c in df if c.startswith("item")]:
+        df[c]=df[c].fillna("").astype(str).str.strip()
+    for col in ("team_champs","enemy_champs"):
+        if col in df: df[col]=df[col].apply(_as_list)
+    df["duration_min"]=pd.to_numeric(df.get("game_end_min"),errors="coerce").fillna(18).clip(6,40)
+    df["dpm"]=df.get("damage_total",np.nan)/df["duration_min"].replace(0,np.nan)
+    for k in ("kills","deaths","assists"): df[k]=df.get(k,0)
+    df["kda"]=(df["kills"]+df["assists"])/df["deaths"].replace(0,np.nan)
+    df["kda"]=df["kda"].fillna(df["kills"]+df["assists"])
     return df
-@st.cache_data
-def load_item_summary(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        st.error(f"`{path}` 파일이 리포지토리 루트에 없습니다.")
-        st.stop()
-    g = pd.read_csv(path)
-    # 기대 헤더: ['item','icon_url','total_picks','wins','win_rate']
-    need = {"item","icon_url","total_picks","wins","win_rate"}
-    miss = need - set(g.columns)
-    if miss:
-        st.error(f"`{path}` 헤더가 예상과 다릅니다. 누락: {sorted(miss)} / 실제: {list(g.columns)}")
-        st.stop()
-    # 빈/NaN 아이템 제거
-    g = g[g["item"].astype(str).str.strip() != ""].copy()
-    return g
-# ── 데이터 로드 ─────────────────────────────────────────
-df = load_players(PLAYERS_CSV)
-item_sum = load_item_summary(ITEM_SUM_CSV)
-# 아이템명 → 아이콘 빠른 매핑 dict (참고: 일부 항목은 아이콘이 없을 수 있음)
-ICON_MAP = dict(zip(item_sum["item"], item_sum["icon_url"]))
-# ── 사이드바 ───────────────────────────────────────────
-st.sidebar.title("ARAM PS Controls")
-champions = sorted(df["champion"].dropna().unique().tolist())
-selected = st.sidebar.selectbox("Champion", champions, index=0)
-# ── 상단 요약 ───────────────────────────────────────────
-dsel = df[df["champion"] == selected].copy()
-games = len(dsel)
-match_cnt = dsel["matchId"].nunique() if "matchId" in dsel.columns else games
-all_matches = df["matchId"].nunique() if "matchId" in df.columns else len(df)
-winrate = round(dsel["win_clean"].mean()*100, 2) if games else 0.0
-pickrate = round(match_cnt / all_matches * 100, 2) if all_matches else 0.0
-st.title(f"{selected}")
-c1, c2, c3 = st.columns(3)
-c1.metric("Games", f"{games}")
-c2.metric("Win Rate", f"{winrate}%")
-c3.metric("Pick Rate", f"{pickrate}%")
-# ── 아이템 추천 (선택 챔피언 기준 + 아이콘 표시) ─────────
-st.subheader("Recommended Items")
-# 선택 챔피언의 아이템 집계 (참가자 CSV에서 직접 계산)
-item_name_cols = [c for c in dsel.columns if re.fullmatch(r"item[0-6]_name", c)]
-if item_name_cols:
-    stacks = []
-    for c in item_name_cols:
-        tmp = dsel[[c, "win_clean"]].rename(columns={c: "item"})
-        stacks.append(tmp)
-    iu = pd.concat(stacks, ignore_index=True)
-    iu = iu[iu["item"].astype(str).str.strip() != ""]
-    top_items = (iu.groupby("item")
-                   .agg(total_picks=("item", "count"), wins=("win_clean","sum"))
-                   .reset_index())
-    top_items["win_rate"] = (top_items["wins"]/top_items["total_picks"]*100).round(2)
-    # 아이콘 붙이기 (요약 CSV의 icon_url 기준)
-    top_items["icon_url"] = top_items["item"].map(ICON_MAP)
-    top_items = top_items.sort_values(["total_picks", "win_rate"], ascending=[False, False]).head(20)
-    st.dataframe(
-        top_items[["icon_url","item","total_picks","wins","win_rate"]],
-        use_container_width=True,
-        column_config={
-            "icon_url": st.column_config.ImageColumn("아이콘", width="small"),
-            "item": "아이템",
-            "total_picks": "픽수",
-            "wins": "승수",
-            "win_rate": "승률(%)",
-        }
-    )
-else:
-    st.info("아이템 이름 컬럼(item0_name ~ item6_name)이 없어 챔피언별 집계를 표시할 수 없습니다.")
-# ── 스펠 추천 (아이콘 있으면 아이콘 표기) ────────────────
-st.subheader("Recommended Spell Combos")
-spell_has_icon = {"spell1_icon","spell2_icon"}.issubset(dsel.columns)
-spell_name_cols = {"spell1_name_fix","spell2_name_fix"} if {"spell1_name_fix","spell2_name_fix"}.issubset(dsel.columns) else {"spell1","spell2"}
-if spell_has_icon and spell_name_cols.issubset(dsel.columns):
-    sp = (dsel.groupby(["spell1_icon","spell2_icon", *spell_name_cols])
-              .agg(games=("win_clean","count"), wins=("win_clean","sum"))
-              .reset_index())
-    sp["win_rate"] = (sp["wins"]/sp["games"]*100).round(2)
-    sp = sp.sort_values(["games","win_rate"], ascending=[False,False]).head(10)
-    vis_cols = ["spell1_icon","spell2_icon", *spell_name_cols, "games", "wins", "win_rate"]
-    st.dataframe(
-        sp[vis_cols],
-        use_container_width=True,
-        column_config={
-            "spell1_icon": st.column_config.ImageColumn("스펠1", width="small"),
-            "spell2_icon": st.column_config.ImageColumn("스펠2", width="small"),
-            list(spell_name_cols)[0]: "스펠1 이름",
-            list(spell_name_cols)[1]: "스펠2 이름",
-            "games":"게임수","wins":"승수","win_rate":"승률(%)"
-        }
-    )
-else:
-    # 아이콘이 없으면 텍스트만
-    if {"spell1","spell2"}.issubset(dsel.columns):
-        sp = (dsel.groupby(["spell1","spell2"])
-                  .agg(games=("win_clean","count"), wins=("win_clean","sum"))
-                  .reset_index())
-        sp["win_rate"] = (sp["wins"]/sp["games"]*100).round(2)
-        sp = sp.sort_values(["games","win_rate"], ascending=[False,False]).head(10)
-        st.dataframe(sp, use_container_width=True)
-    else:
-        st.info("스펠 관련 컬럼이 없습니다.")
-# ── 룬 추천 (아이콘 있으면 아이콘 표기) ──────────────────
-st.subheader("Recommended Rune Combos")
-rune_has_icon = {"rune_core_icon","rune_sub_icon"}.issubset(dsel.columns)
-if rune_has_icon and {"rune_core","rune_sub"}.issubset(dsel.columns):
-    ru = (dsel.groupby(["rune_core_icon","rune_core","rune_sub_icon","rune_sub"])
-             .agg(games=("win_clean","count"), wins=("win_clean","sum"))
-             .reset_index())
-    ru["win_rate"] = (ru["wins"]/ru["games"]*100).round(2)
-    ru = ru.sort_values(["games","win_rate"], ascending=[False,False]).head(10)
-    st.dataframe(
-        ru[["rune_core_icon","rune_core","rune_sub_icon","rune_sub","games","wins","win_rate"]],
-        use_container_width=True,
-        column_config={
-            "rune_core_icon": st.column_config.ImageColumn("핵심룬", width="small"),
-            "rune_sub_icon":  st.column_config.ImageColumn("보조트리", width="small"),
-            "rune_core":"핵심룬 이름","rune_sub":"보조트리 이름",
-            "games":"게임수","wins":"승수","win_rate":"승률(%)"
-        }
-    )
-else:
-    if {"rune_core","rune_sub"}.issubset(dsel.columns):
-        ru = (dsel.groupby(["rune_core","rune_sub"])
-                 .agg(games=("win_clean","count"), wins=("win_clean","sum"))
-                 .reset_index())
-        ru["win_rate"] = (ru["wins"]/ru["games"]*100).round(2)
-        ru = ru.sort_values(["games","win_rate"], ascending=[False,False]).head(10)
-        st.dataframe(ru, use_container_width=True)
-    else:
-        st.info("룬 관련 컬럼이 없습니다.")
-# ── 원본(선택 챔피언) ─────────────────────────────────────
-with st.expander("Raw rows (selected champion)"):
-    st.dataframe(dsel, use_container_width=True)
+# ------------------------------------------------------------------
+# 사이드바
+# ------------------------------------------------------------------
+st.sidebar.header(":gear:  설정")
+auto=_discover_csv()
+st.sidebar.write(":mag: 자동 검색:", auto if auto else "없음")
+up=st.sidebar.file_uploader("CSV 업로드(선택)", type="csv")
+df=load_df(up) if up else load_df(auto) if auto else None
+if df is None:
+    st.error("CSV 파일이 없습니다."); st.stop()
+champions=sorted(df["champion"].dropna().unique())
+sel=st.sidebar.selectbox(":dart: 챔피언 선택", champions)
+# ------------------------------------------------------------------
+# 헤더 & 메트릭
+# ------------------------------------------------------------------
+dfc=df[df["champion"]==sel]
+total=df["matchId"].nunique() if "matchId" in df else len(df)
+games=len(dfc)
+wr=round(dfc["win_clean"].mean()*100,2) if games else 0
+pr=round(games/total*100,2) if total else 0
+avg_k,avg_d,avg_a=[round(dfc[c].mean(),2) for c in ("kills","deaths","assists")]
+avg_dpm=round(dfc["dpm"].mean(),1)
+st.title(":trophy: ARAM Analytics")
+ic=load_image(champion_icon_url(sel))
+mid=st.columns([2,3,2])[1]
+with mid:
+    if ic: st.image(ic, width=100)
+    st.subheader(sel, divider=False)
+m1,m2,m3,m4,m5=st.columns(5)
+m1.metric("게임 수", games)
+m2.metric("승률", f"{wr}%")
+m3.metric("픽률", f"{pr}%")
+m4.metric("평균 K/D/A", f"{avg_k}/{avg_d}/{avg_a}")
+m5.metric("평균 DPM", avg_dpm)
+# ------------------------------------------------------------------
+tab1,tab2,tab3,tab4=st.tabs([":bar_chart: 게임 분석",":crossed_swords: 아이템 & 스펠",":stopwatch: 타임라인",":clipboard: 상세 데이터"])
+with tab1:
+    if "first_blood_min" in dfc and dfc["first_blood_min"].notna().any():
+        st.metric("퍼블 평균 분", round(dfc["first_blood_min"].mean(),2))
+    if "game_end_min" in dfc:
+        st.metric("평균 게임 시간", round(dfc["game_end_min"].mean(),2))
+with tab2:
+    left,right=st.columns(2)
+    # 아이템
+    with left:
+        st.subheader(":shield: 아이템 성과")
+        item_cols=[c for c in dfc if c.startswith("item")]
+        rec=pd.concat([dfc[["matchId","win_clean",c]].rename(columns={c:"item"}) for c in item_cols])
+        g=(rec[rec["item"]!=""]
+           .groupby("item").agg(total=("matchId","count"), wins=("win_clean","sum"))
+           .assign(win_rate=lambda d:(d.wins/d.total*100).round(2))
+           .sort_values(["total","win_rate"],ascending=[False,False]).head(10).reset_index())
+        for _,r in g.iterrows():
+            c_icon,c_name,c_pick,c_wr=st.columns([1,4,2,2])
+            with c_icon: st.image(item_icon_url(str(r.item)), width=32)
+            with c_name: st.write(str(r.item))                  # ← str() 캐스팅
+            with c_pick: st.write(f"{int(r.total)} 게임")
+            with c_wr:   st.write(f"{r.win_rate}%")
+            st.divider()
+    # 스펠
+    with right:
+        st.subheader(":sparkles: 스펠 조합")
+        sp=(dfc.groupby("spell_combo")
+             .agg(games=("matchId","count"), wins=("win_clean","sum"))
+             .assign(win_rate=lambda d:(d.wins/d.games*100).round(2))
+             .sort_values(["games","win_rate"],ascending=[False,False]).head(8).reset_index())
+        for _,r in sp.iterrows():
+            s1,s2=[s.strip() for s in str(r.spell_combo).split("+")]
+            col_i,col_n,col_v=st.columns([2,3,2])
+            with col_i:
+                st.image(spell_icon_url(s1), width=28)
+                st.image(spell_icon_url(s2), width=28)
+            with col_n: st.write(str(r.spell_combo))
+            with col_v: st.write(f"{r.win_rate}%\n{int(r.games)}G")
+            st.divider()
+with tab3:
+    if "first_core_item_min" in dfc and dfc["first_core_item_min"].notna().any():
+        st.metric("1코어 평균 분", round(dfc["first_core_item_min"].mean(),2))
+        fig=px.histogram(dfc,x="first_core_item_min",nbins=24,title="1코어 시점")
+        fig.update_layout(plot_bgcolor="#1E2328",paper_bgcolor="#1E2328",font_color="#F0E6D2")
+        st.plotly_chart(fig, use_container_width=True)
+with tab4:
+    st.dataframe(dfc.drop(columns=["team_champs","enemy_champs"],errors="ignore"),
+                 use_container_width=True)
+st.caption(f"Data-Dragon v{DDRAGON_VERSION} · {len(champions)}챔프 · {total}경기")
