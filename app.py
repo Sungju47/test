@@ -173,13 +173,6 @@ def load_df(buf) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(_as_list)
 
-    # 시간/지표
-    df["duration_min"] = pd.to_numeric(df.get("game_end_min"), errors="coerce").fillna(18).clip(6, 40)
-    df["dpm"] = df.get("damage_total", np.nan) / df["duration_min"].replace(0, np.nan)
-    for k in ("kills", "deaths", "assists"):
-        df[k] = pd.to_numeric(df.get(k, 0), errors="coerce").fillna(0)
-    df["kda"] = (df["kills"] + df["assists"]) / df["deaths"].replace(0, np.nan)
-    df["kda"] = df["kda"].fillna(df["kills"] + df["assists"])
 
     return df
 
